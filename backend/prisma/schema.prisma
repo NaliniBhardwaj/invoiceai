@@ -1,0 +1,422 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Convention: Customer, PurchaseOrder, Invoice, and Payment carry a
+// nullable `deletedAt` for soft deletion — financial records are never
+// hard-deleted. Every service's findMany/findFirst against these models
+// MUST filter `deletedAt: null` unless explicitly listing deleted/archived
+// records. Added now, before any service queries these tables, so it
+// never needs retrofitting across an existing query surface.
+
+// ════════════════════════════════════════════════════════
+// TENANCY & IDENTITY
+// ════════════════════════════════════════════════════════
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  gstNumber String?
+  state     String // drives CGST/SGST vs IGST determination on invoices
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users              User[]
+  customers          Customer[]
+  invoices           Invoice[]
+  purchaseOrders     PurchaseOrder[]
+  payments           Payment[]
+  auditLogs          AuditLog[]
+  reconciliationRuns ReconciliationRun[]
+  userRoles          UserRole[]
+  aiConversations    AIConversation[]
+  domainEventLogs    DomainEventLog[]
+  roles              Role[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  organizationId String
+  email        String   @unique
+  passwordHash String
+  name         String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  userRoles    UserRole[]
+  auditLogs    AuditLog[]
+  aiConversations AIConversation[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+// ── RBAC ─────────────────────────────────────────────────
+// Role: a named bundle of permissions. organizationId is null for system
+// roles (OWNER/ADMIN/ACCOUNTANT/VIEWER, seeded once) and set for future
+// org-specific custom roles — no schema change needed when that ships.
+model Role {
+  id             String   @id @default(cuid())
+  name           String
+  isSystem       Boolean  @default(true)
+  organizationId String?
+  createdAt      DateTime @default(now())
+
+  organization    Organization?    @relation(fields: [organizationId], references: [id])
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(cuid())
+  key         String  @unique // e.g. "invoice:create", "reconciliation:run"
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// UserRole scopes a role assignment to an organization. A user has exactly
+// one row per org today; this is what makes "same user, different role in a
+// different org" a non-event when multi-org ships.
+model UserRole {
+  id             String   @id @default(cuid())
+  userId         String
+  roleId         String
+  organizationId String
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([userId, roleId, organizationId])
+  @@index([organizationId])
+  @@map("user_roles")
+}
+
+// ════════════════════════════════════════════════════════
+// CUSTOMERS & PURCHASE ORDERS
+// ════════════════════════════════════════════════════════
+
+model Customer {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  companyName    String?
+  gstNumber      String?
+  billingAddress String   @db.Text
+  state          String // drives CGST/SGST vs IGST on invoices to this customer
+  email          String?
+  phone          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime? // soft delete — financial records are never hard-deleted
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  invoices       Invoice[]
+  purchaseOrders PurchaseOrder[]
+
+  @@index([organizationId])
+  @@index([gstNumber])
+  @@map("customers")
+}
+
+model PurchaseOrder {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String
+  poNumber       String
+  status         POStatus @default(OPEN)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  invoices     Invoice[]
+
+  @@unique([organizationId, poNumber])
+  @@index([organizationId])
+  @@map("purchase_orders")
+}
+
+enum POStatus {
+  OPEN
+  PARTIALLY_INVOICED
+  CLOSED
+  CANCELLED
+}
+
+// ════════════════════════════════════════════════════════
+// INVOICES & PAYMENTS
+// ════════════════════════════════════════════════════════
+
+model Invoice {
+  id              String        @id @default(cuid())
+  organizationId  String
+  customerId      String
+  purchaseOrderId String?
+  invoiceNumber   String
+  type            InvoiceType
+  status          InvoiceStatus @default(DRAFT)
+
+  subscriptionPlan     String?
+  subscriptionDuration Int? // months
+
+  invoiceDate DateTime
+  dueDate     DateTime
+
+  subtotal      Decimal @db.Decimal(14, 2)
+  taxPercentage Decimal @db.Decimal(5, 2)
+  cgst          Decimal @default(0) @db.Decimal(14, 2)
+  sgst          Decimal @default(0) @db.Decimal(14, 2)
+  igst          Decimal @default(0) @db.Decimal(14, 2)
+  grandTotal    Decimal @db.Decimal(14, 2)
+
+  pdfUrl    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  organization  Organization      @relation(fields: [organizationId], references: [id])
+  customer      Customer          @relation(fields: [customerId], references: [id])
+  purchaseOrder PurchaseOrder?    @relation(fields: [purchaseOrderId], references: [id])
+  lineItems     InvoiceLineItem[]
+  payments      Payment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@map("invoices")
+}
+
+enum InvoiceType {
+  SUBSCRIPTION_NEW
+  SUBSCRIPTION_RENEWAL
+  ONE_TIME
+  PURCHASE_ORDER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIALLY_PAID
+  OVERDUE
+  CANCELLED
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Decimal @db.Decimal(10, 2)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  lineTotal   Decimal @db.Decimal(14, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id             String   @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  amount         Decimal  @db.Decimal(14, 2)
+  paidAt         DateTime
+  method         String?
+  reference      String?
+  createdAt      DateTime @default(now())
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id])
+
+  @@index([organizationId])
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+// ════════════════════════════════════════════════════════
+// GST RECONCILIATION
+// ════════════════════════════════════════════════════════
+
+model ReconciliationRun {
+  id             String          @id @default(cuid())
+  organizationId String
+  period         String // e.g. "2026-03"
+  sourceType     ReconSourceType
+  sourceFileUrl  String?
+  status         ReconStatus     @default(PROCESSING)
+  createdAt      DateTime        @default(now())
+  completedAt    DateTime?
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  findings     ReconciliationFinding[]
+
+  @@index([organizationId, period])
+  @@map("reconciliation_runs")
+}
+
+enum ReconSourceType {
+  GST_CSV
+  GST_JSON
+}
+
+enum ReconStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ReconciliationFinding {
+  id            String          @id @default(cuid())
+  runId         String
+  type          FindingType
+  severity      FindingSeverity
+  invoiceId     String?
+  description   String          @db.Text
+  expectedValue String?
+  actualValue   String?
+  createdAt     DateTime        @default(now())
+
+  run ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, type])
+  @@map("reconciliation_findings")
+}
+
+enum FindingType {
+  MISSING_INVOICE
+  MISSING_PAYMENT
+  GST_MISMATCH
+  AMOUNT_MISMATCH
+  TAX_MISMATCH
+  DUPLICATE_INVOICE
+  DUPLICATE_GST_ENTRY
+}
+
+enum FindingSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// ════════════════════════════════════════════════════════
+// AUDIT, DOMAIN EVENTS & JOBS
+// ════════════════════════════════════════════════════════
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         String // e.g. "INVOICE_CREATED"
+  entityType     String
+  entityId       String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, entityType, entityId])
+  @@map("audit_logs")
+}
+
+// Persisted record of every domain event emitted through the EventBus.
+// Powers replay, debugging, and is the seam for swapping the in-process
+// bus for a real message queue later without touching emitter call sites.
+model DomainEventLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  type           String // e.g. "invoice.created"
+  payload        Json
+  actorId        String?
+  occurredAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, type])
+  @@map("domain_event_logs")
+}
+
+model ScheduledJobRun {
+  id         String       @id @default(cuid())
+  jobName    String
+  status     JobRunStatus @default(RUNNING)
+  startedAt  DateTime     @default(now())
+  finishedAt DateTime?
+  result     Json?
+  error      String?      @db.Text
+
+  @@index([jobName, startedAt])
+  @@map("scheduled_job_runs")
+}
+
+enum JobRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ════════════════════════════════════════════════════════
+// AI ASSISTANT
+// ════════════════════════════════════════════════════════
+
+model AIConversation {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  messages     AIMessage[]
+
+  @@index([organizationId])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String // "user" | "assistant"
+  content        String   @db.Text
+  actionTaken    String? // e.g. "CREATE_INVOICE" — null if no tool was invoked
+  actionPayload  Json?
+  createdAt      DateTime @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("ai_messages")
+}

@@ -1,0 +1,131 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* ── Ledger palette ──────────────────────────────────── */
+  --paper: #f7f6f2;
+  --paper-raised: #ffffff;
+  --ink: #14181f;
+  --slate: #5b6472;
+  --slate-muted: #8b93a1;
+  --border-hairline: #dfdcd3;
+  --verdigris: #2f6f62;
+  --verdigris-soft: #e3eee9;
+  --amber: #c8852a;
+  --amber-soft: #faf0de;
+  --crimson: #b33a3a;
+  --crimson-soft: #f8e9e7;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-raised);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--verdigris);
+  --primary-foreground: #f7f6f2;
+  --secondary: var(--verdigris-soft);
+  --secondary-foreground: var(--verdigris);
+  --muted: #efede6;
+  --muted-foreground: var(--slate);
+  --accent: var(--amber-soft);
+  --accent-foreground: var(--amber);
+  --destructive: var(--crimson);
+  --destructive-foreground: #f7f6f2;
+  --border: var(--border-hairline);
+  --input: var(--border-hairline);
+  --ring: var(--verdigris);
+  --radius: 0.5rem;
+}
+
+.dark {
+  --paper: #14181f;
+  --paper-raised: #1b212b;
+  --ink: #ece9e1;
+  --slate: #9aa3b2;
+  --slate-muted: #6b7280;
+  --border-hairline: #2a3140;
+  --verdigris: #4d9384;
+  --verdigris-soft: #1d2e2a;
+  --amber: #d99c43;
+  --amber-soft: #2e2519;
+  --crimson: #d4685f;
+  --crimson-soft: #2e1c1b;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper-raised);
+  --card-foreground: var(--ink);
+  --popover: var(--paper-raised);
+  --popover-foreground: var(--ink);
+  --primary: var(--verdigris);
+  --primary-foreground: #14181f;
+  --secondary: var(--verdigris-soft);
+  --secondary-foreground: var(--verdigris);
+  --muted: #1f2530;
+  --muted-foreground: var(--slate);
+  --accent: var(--amber-soft);
+  --accent-foreground: var(--amber);
+  --destructive: var(--crimson);
+  --destructive-foreground: #14181f;
+  --border: var(--border-hairline);
+  --input: var(--border-hairline);
+  --ring: var(--verdigris);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-crimson: var(--crimson);
+  --color-crimson-soft: var(--crimson-soft);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+  }
+}
+
+@layer utilities {
+  /* The signature detail: every monetary figure and document number in
+     the product renders in tabular monospace so columns of numbers
+     align like a ledger, regardless of digit width. */
+  .figure-numeric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+}
