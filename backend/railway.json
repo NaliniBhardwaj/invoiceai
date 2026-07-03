@@ -5,7 +5,7 @@
     "buildCommand": "PUPPETEER_SKIP_DOWNLOAD=true npm install && npx prisma generate && npm run build"
   },
   "deploy": {
-    "startCommand": "npm run start",
+    "startCommand": "node dist/src/server.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
