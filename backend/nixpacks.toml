@@ -1,0 +1,8 @@
+[variables]
+PUPPETEER_SKIP_DOWNLOAD = "true"
+
+[phases.build]
+cmds = ["npm install", "npx prisma generate", "npm run build"]
+
+[start]
+cmd = "npm run start"

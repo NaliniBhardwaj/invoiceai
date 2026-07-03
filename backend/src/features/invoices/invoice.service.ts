@@ -4,11 +4,23 @@ import { prisma } from "@/shared/prisma/client";
 import { eventBus } from "@/shared/events/event-bus";
 import { EventTypes } from "@/shared/events/domain-event";
 import { ApiError } from "@/shared/utils/api-error";
-import { buildPaginationMeta, toSkipTake, type PaginatedResult } from "@/shared/utils/pagination";
+import {
+  buildPaginationMeta,
+  toSkipTake,
+  type PaginatedResult,
+} from "@/shared/utils/pagination";
 import { calculateLineTotal, calculateTax } from "@/features/tax/tax-engine";
 import { purchaseOrderService } from "@/features/purchase-orders/purchase-order.service";
-import type { CreateInvoiceInput, InvoiceQuery, UpdateInvoiceInput } from "@/features/invoices/invoice.schema";
-import type { InvoiceAnalyticsDTO, InvoiceDTO, LineItemDTO } from "@/features/invoices/invoice.types";
+import type {
+  CreateInvoiceInput,
+  InvoiceQuery,
+  UpdateInvoiceInput,
+} from "@/features/invoices/invoice.schema";
+import type {
+  InvoiceAnalyticsDTO,
+  InvoiceDTO,
+  LineItemDTO,
+} from "@/features/invoices/invoice.types";
 
 // Local shape definitions — avoids dependency on Prisma's generated
 // namespace types which require the query-engine binary to be present.
@@ -75,11 +87,13 @@ class InvoiceService {
   async create(
     organizationId: string,
     actorId: string,
-    input: CreateInvoiceInput
+    input: CreateInvoiceInput,
   ): Promise<InvoiceDTO> {
     const [org, customer] = await Promise.all([
       prisma.organization.findUniqueOrThrow({ where: { id: organizationId } }),
-      prisma.customer.findFirst({ where: { id: input.customerId, organizationId, deletedAt: null } }),
+      prisma.customer.findFirst({
+        where: { id: input.customerId, organizationId, deletedAt: null },
+      }),
     ]);
     if (!customer) throw ApiError.notFound("Customer not found");
 
@@ -89,7 +103,9 @@ class InvoiceService {
       });
       if (!po) throw ApiError.notFound("Purchase order not found");
       if (po.status === "CLOSED" || po.status === "CANCELLED") {
-        throw ApiError.badRequest("Cannot create invoice against a closed or cancelled PO");
+        throw ApiError.badRequest(
+          "Cannot create invoice against a closed or cancelled PO",
+        );
       }
     }
 
@@ -98,52 +114,70 @@ class InvoiceService {
       ...li,
       lineTotal: calculateLineTotal(li),
     }));
-    const subtotal = lineItemAmounts.reduce((sum, li) => sum.plus(li.lineTotal), new Decimal(0));
-    const tax = calculateTax(subtotal, input.taxPercentage, org.state, customer.state);
+    const subtotal = lineItemAmounts.reduce(
+      (sum, li) => sum.plus(li.lineTotal),
+      new Decimal(0),
+    );
+    const tax = calculateTax(
+      subtotal,
+      input.taxPercentage,
+      org.state,
+      customer.state,
+    );
     const invoiceNumber = await this.generateInvoiceNumber(organizationId);
 
-    const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const inv = await tx.invoice.create({
-        data: {
-          organizationId,
-          customerId: input.customerId,
-          purchaseOrderId: input.purchaseOrderId ?? null,
-          invoiceNumber,
-          type: input.type,
-          status: "DRAFT",
-          subscriptionPlan: input.subscriptionPlan ?? null,
-          subscriptionDuration: input.subscriptionDuration ?? null,
-          invoiceDate: input.invoiceDate,
-          dueDate: input.dueDate,
-          subtotal: tax.subtotal,
-          taxPercentage: tax.taxPercentage,
-          cgst: tax.cgst,
-          sgst: tax.sgst,
-          igst: tax.igst,
-          grandTotal: tax.grandTotal,
-          lineItems: {
-            create: lineItemAmounts.map((li) => ({
-              description: li.description,
-              quantity: new Decimal(li.quantity),
-              unitPrice: new Decimal(li.unitPrice),
-              lineTotal: li.lineTotal.toDecimalPlaces(2),
-            })),
+    const invoice = await prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        const inv = await tx.invoice.create({
+          data: {
+            organizationId,
+            customerId: input.customerId,
+            purchaseOrderId: input.purchaseOrderId ?? null,
+            invoiceNumber,
+            type: input.type,
+            status: "DRAFT",
+            subscriptionPlan: input.subscriptionPlan ?? null,
+            subscriptionDuration: input.subscriptionDuration ?? null,
+            invoiceDate: input.invoiceDate,
+            dueDate: input.dueDate,
+            subtotal: tax.subtotal,
+            taxPercentage: tax.taxPercentage,
+            cgst: tax.cgst,
+            sgst: tax.sgst,
+            igst: tax.igst,
+            grandTotal: tax.grandTotal,
+            lineItems: {
+              create: lineItemAmounts.map((li) => ({
+                description: li.description,
+                quantity: new Decimal(li.quantity),
+                unitPrice: new Decimal(li.unitPrice),
+                lineTotal: li.lineTotal.toDecimalPlaces(2),
+              })),
+            },
           },
-        },
-        include: this.includeShape(),
-      });
-      return inv;
-    });
+          include: this.includeShape(),
+        });
+        return inv;
+      },
+    );
 
     if (input.purchaseOrderId) {
-      await purchaseOrderService.syncStatusFromInvoice(organizationId, input.purchaseOrderId);
+      await purchaseOrderService.syncStatusFromInvoice(
+        organizationId,
+        input.purchaseOrderId,
+      );
     }
 
     await eventBus.emit(
       EventTypes.INVOICE_CREATED,
       organizationId,
-      { entityType: "Invoice", entityId: invoice.id, invoiceNumber, grandTotal: tax.grandTotal.toString() },
-      actorId
+      {
+        entityType: "Invoice",
+        entityId: invoice.id,
+        invoiceNumber,
+        grandTotal: tax.grandTotal.toString(),
+      },
+      actorId,
     );
 
     return this.toDTO(invoice as InvoiceRow, tax.isIntraState);
@@ -153,7 +187,7 @@ class InvoiceService {
     organizationId: string,
     actorId: string,
     invoiceId: string,
-    input: UpdateInvoiceInput
+    input: UpdateInvoiceInput,
   ): Promise<InvoiceDTO> {
     const existing = await this.findOrThrow(organizationId, invoiceId);
     if (existing.status !== "DRAFT") {
@@ -166,64 +200,80 @@ class InvoiceService {
     ]);
 
     let subtotal = new Decimal(existing.subtotal);
-    let tax = calculateTax(subtotal, existing.taxPercentage, org.state, customer.state);
+    let tax = calculateTax(
+      subtotal,
+      existing.taxPercentage.toString(),
+      org.state,
+      customer.state,
+    );
 
-    const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      if (input.lineItems) {
-        const lineItemAmounts = input.lineItems.map((li) => ({
-          ...li,
-          lineTotal: calculateLineTotal(li),
-        }));
-        subtotal = lineItemAmounts.reduce((sum, li) => sum.plus(li.lineTotal), new Decimal(0));
-        tax = calculateTax(
-          subtotal,
-          input.taxPercentage ?? Number(existing.taxPercentage),
-          org.state,
-          customer.state
-        );
+    const invoice = await prisma.$transaction(
+      async (tx: Prisma.TransactionClient) => {
+        if (input.lineItems) {
+          const lineItemAmounts = input.lineItems.map((li) => ({
+            ...li,
+            lineTotal: calculateLineTotal(li),
+          }));
+          subtotal = lineItemAmounts.reduce(
+            (sum, li) => sum.plus(li.lineTotal),
+            new Decimal(0),
+          );
+          tax = calculateTax(
+            subtotal,
+            input.taxPercentage ?? Number(existing.taxPercentage),
+            org.state,
+            customer.state,
+          );
 
-        await tx.invoiceLineItem.deleteMany({ where: { invoiceId } });
-        await tx.invoiceLineItem.createMany({
-          data: lineItemAmounts.map((li) => ({
-            invoiceId,
-            description: li.description,
-            quantity: new Decimal(li.quantity),
-            unitPrice: new Decimal(li.unitPrice),
-            lineTotal: li.lineTotal.toDecimalPlaces(2),
-          })),
+          await tx.invoiceLineItem.deleteMany({ where: { invoiceId } });
+          await tx.invoiceLineItem.createMany({
+            data: lineItemAmounts.map((li) => ({
+              invoiceId,
+              description: li.description,
+              quantity: new Decimal(li.quantity),
+              unitPrice: new Decimal(li.unitPrice),
+              lineTotal: li.lineTotal.toDecimalPlaces(2),
+            })),
+          });
+        }
+
+        return tx.invoice.update({
+          where: { id: invoiceId },
+          data: {
+            purchaseOrderId: input.purchaseOrderId ?? undefined,
+            subscriptionPlan: input.subscriptionPlan,
+            subscriptionDuration: input.subscriptionDuration,
+            invoiceDate: input.invoiceDate,
+            dueDate: input.dueDate,
+            taxPercentage: input.taxPercentage
+              ? new Decimal(input.taxPercentage)
+              : undefined,
+            subtotal: tax.subtotal,
+            cgst: tax.cgst,
+            sgst: tax.sgst,
+            igst: tax.igst,
+            grandTotal: tax.grandTotal,
+          },
+          include: this.includeShape(),
         });
-      }
-
-      return tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          purchaseOrderId: input.purchaseOrderId ?? undefined,
-          subscriptionPlan: input.subscriptionPlan,
-          subscriptionDuration: input.subscriptionDuration,
-          invoiceDate: input.invoiceDate,
-          dueDate: input.dueDate,
-          taxPercentage: input.taxPercentage ? new Decimal(input.taxPercentage) : undefined,
-          subtotal: tax.subtotal,
-          cgst: tax.cgst,
-          sgst: tax.sgst,
-          igst: tax.igst,
-          grandTotal: tax.grandTotal,
-        },
-        include: this.includeShape(),
-      });
-    });
+      },
+    );
 
     await eventBus.emit(
       EventTypes.INVOICE_UPDATED,
       organizationId,
       { entityType: "Invoice", entityId: invoiceId },
-      actorId
+      actorId,
     );
 
     return this.toDTO(invoice as InvoiceRow, tax.isIntraState);
   }
 
-  async issue(organizationId: string, actorId: string, invoiceId: string): Promise<InvoiceDTO> {
+  async issue(
+    organizationId: string,
+    actorId: string,
+    invoiceId: string,
+  ): Promise<InvoiceDTO> {
     const existing = await this.findOrThrow(organizationId, invoiceId);
     if (existing.status !== "DRAFT") {
       throw ApiError.badRequest("Only DRAFT invoices can be issued");
@@ -238,14 +288,25 @@ class InvoiceService {
     await eventBus.emit(
       EventTypes.INVOICE_ISSUED,
       organizationId,
-      { entityType: "Invoice", entityId: invoiceId, invoiceNumber: invoice.invoiceNumber },
-      actorId
+      {
+        entityType: "Invoice",
+        entityId: invoiceId,
+        invoiceNumber: invoice.invoiceNumber,
+      },
+      actorId,
     );
 
-    return this.toDTO(invoice as InvoiceRow, this.computeIsIntraState(invoice as InvoiceRow));
+    return this.toDTO(
+      invoice as InvoiceRow,
+      this.computeIsIntraState(invoice as InvoiceRow),
+    );
   }
 
-  async cancel(organizationId: string, actorId: string, invoiceId: string): Promise<InvoiceDTO> {
+  async cancel(
+    organizationId: string,
+    actorId: string,
+    invoiceId: string,
+  ): Promise<InvoiceDTO> {
     const existing = await this.findOrThrow(organizationId, invoiceId);
     if (existing.status === "PAID" || existing.status === "CANCELLED") {
       throw ApiError.badRequest(`Cannot cancel a ${existing.status} invoice`);
@@ -261,27 +322,42 @@ class InvoiceService {
       EventTypes.INVOICE_CANCELLED,
       organizationId,
       { entityType: "Invoice", entityId: invoiceId },
-      actorId
+      actorId,
     );
 
-    return this.toDTO(invoice as InvoiceRow, this.computeIsIntraState(invoice as InvoiceRow));
+    return this.toDTO(
+      invoice as InvoiceRow,
+      this.computeIsIntraState(invoice as InvoiceRow),
+    );
   }
 
-  async softDelete(organizationId: string, actorId: string, invoiceId: string): Promise<void> {
+  async softDelete(
+    organizationId: string,
+    actorId: string,
+    invoiceId: string,
+  ): Promise<void> {
     const existing = await this.findOrThrow(organizationId, invoiceId);
     if (!["DRAFT", "CANCELLED"].includes(existing.status)) {
-      throw ApiError.badRequest("Only DRAFT or CANCELLED invoices can be deleted");
+      throw ApiError.badRequest(
+        "Only DRAFT or CANCELLED invoices can be deleted",
+      );
     }
-    await prisma.invoice.update({ where: { id: invoiceId }, data: { deletedAt: new Date() } });
+    await prisma.invoice.update({
+      where: { id: invoiceId },
+      data: { deletedAt: new Date() },
+    });
     await eventBus.emit(
       EventTypes.INVOICE_DELETED,
       organizationId,
       { entityType: "Invoice", entityId: invoiceId },
-      actorId
+      actorId,
     );
   }
 
-  async getById(organizationId: string, invoiceId: string): Promise<InvoiceDTO> {
+  async getById(
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<InvoiceDTO> {
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, organizationId, deletedAt: null },
       include: this.includeShape(),
@@ -291,7 +367,10 @@ class InvoiceService {
     return this.toDTO(row, this.computeIsIntraState(row));
   }
 
-  async list(organizationId: string, query: InvoiceQuery): Promise<PaginatedResult<InvoiceDTO>> {
+  async list(
+    organizationId: string,
+    query: InvoiceQuery,
+  ): Promise<PaginatedResult<InvoiceDTO>> {
     const where = {
       organizationId,
       deletedAt: null,
@@ -331,27 +410,28 @@ class InvoiceService {
 
     return {
       data: (invoices as InvoiceRow[]).map((inv: InvoiceRow) =>
-        this.toDTO(inv, this.computeIsIntraState(inv))
+        this.toDTO(inv, this.computeIsIntraState(inv)),
       ),
       meta: buildPaginationMeta(total as number, query.page, query.limit),
     };
   }
 
   async getAnalytics(organizationId: string): Promise<InvoiceAnalyticsDTO> {
-    const [totalInvoices, byStatusRaw, byTypeRaw, revenueRaw] = await Promise.all([
-      prisma.invoice.count({ where: { organizationId, deletedAt: null } }),
-      prisma.invoice.groupBy({
-        by: ["status"],
-        where: { organizationId, deletedAt: null },
-        _count: { _all: true },
-        _sum: { grandTotal: true },
-      }),
-      prisma.invoice.groupBy({
-        by: ["type"],
-        where: { organizationId, deletedAt: null },
-        _count: { _all: true },
-      }),
-      prisma.$queryRaw<Array<{ month: string; revenue: string }>>`
+    const [totalInvoices, byStatusRaw, byTypeRaw, revenueRaw] =
+      await Promise.all([
+        prisma.invoice.count({ where: { organizationId, deletedAt: null } }),
+        prisma.invoice.groupBy({
+          by: ["status"],
+          where: { organizationId, deletedAt: null },
+          _count: { _all: true },
+          _sum: { grandTotal: true },
+        }),
+        prisma.invoice.groupBy({
+          by: ["type"],
+          where: { organizationId, deletedAt: null },
+          _count: { _all: true },
+        }),
+        prisma.$queryRaw<Array<{ month: string; revenue: string }>>`
         SELECT DATE_FORMAT(invoiceDate, '%Y-%m') as month,
                CAST(SUM(grandTotal) AS CHAR) as revenue
         FROM invoices
@@ -362,20 +442,33 @@ class InvoiceService {
         ORDER BY month DESC
         LIMIT 12
       `,
-    ]);
+      ]);
 
-    const byStatus = (byStatusRaw as GroupByStatusRow[]).map((row: GroupByStatusRow) => ({
-      status: row.status,
-      count: row._count._all,
-      total: (row._sum.grandTotal ?? new Decimal(0)).toString(),
-    }));
+    const byStatus = (byStatusRaw as GroupByStatusRow[]).map(
+      (row: GroupByStatusRow) => ({
+        status: row.status,
+        count: row._count._all,
+        total: (row._sum.grandTotal ?? new Decimal(0)).toString(),
+      }),
+    );
 
     const totalRevenue = (byStatusRaw as GroupByStatusRow[])
-      .filter((r: GroupByStatusRow) => ["ISSUED", "PAID", "PARTIALLY_PAID"].includes(r.status))
-      .reduce((sum: Decimal, r: GroupByStatusRow) => sum.plus(r._sum.grandTotal ?? 0), new Decimal(0));
+      .filter((r: GroupByStatusRow) =>
+        ["ISSUED", "PAID", "PARTIALLY_PAID"].includes(r.status),
+      )
+      .reduce(
+        (sum: Decimal, r: GroupByStatusRow) => sum.plus(r._sum.grandTotal ?? 0),
+        new Decimal(0),
+      );
 
-    const paid = (byStatusRaw as GroupByStatusRow[]).find((r: GroupByStatusRow) => r.status === "PAID")?._sum.grandTotal ?? new Decimal(0);
-    const overdue = (byStatusRaw as GroupByStatusRow[]).find((r: GroupByStatusRow) => r.status === "OVERDUE")?._sum.grandTotal ?? new Decimal(0);
+    const paid =
+      (byStatusRaw as GroupByStatusRow[]).find(
+        (r: GroupByStatusRow) => r.status === "PAID",
+      )?._sum.grandTotal ?? new Decimal(0);
+    const overdue =
+      (byStatusRaw as GroupByStatusRow[]).find(
+        (r: GroupByStatusRow) => r.status === "OVERDUE",
+      )?._sum.grandTotal ?? new Decimal(0);
     const outstanding = totalRevenue.minus(new Decimal(paid));
 
     return {
@@ -385,7 +478,10 @@ class InvoiceService {
       paid: paid.toString(),
       overdue: overdue.toString(),
       byStatus,
-      byType: (byTypeRaw as GroupByTypeRow[]).map((r: GroupByTypeRow) => ({ type: r.type, count: r._count._all })),
+      byType: (byTypeRaw as GroupByTypeRow[]).map((r: GroupByTypeRow) => ({
+        type: r.type,
+        count: r._count._all,
+      })),
       revenueByMonth: revenueRaw as RevenueMonthRow[],
     };
   }
@@ -394,7 +490,7 @@ class InvoiceService {
   async updateStatusFromPayment(
     organizationId: string,
     invoiceId: string,
-    actorId: string
+    actorId: string,
   ): Promise<void> {
     const invoice = await prisma.invoice.findFirst({
       where: { id: invoiceId, organizationId, deletedAt: null },
@@ -404,7 +500,7 @@ class InvoiceService {
 
     const totalPaid = (invoice.payments as PaymentRow[]).reduce(
       (sum: Decimal, p: PaymentRow) => sum.plus(p.amount),
-      new Decimal(0)
+      new Decimal(0),
     );
     const grandTotal = new Decimal(invoice.grandTotal);
     let newStatus = invoice.status;
@@ -413,23 +509,41 @@ class InvoiceService {
       newStatus = "PAID";
     } else if (totalPaid.greaterThan(0)) {
       newStatus = "PARTIALLY_PAID";
+    } else {
+      // All payments have been refunded — revert to ISSUED so the invoice
+      // is once again actionable for new payments.
+      if (invoice.status === "PARTIALLY_PAID") {
+        newStatus = "ISSUED";
+      }
     }
 
     if (newStatus !== invoice.status) {
-      await prisma.invoice.update({ where: { id: invoiceId }, data: { status: newStatus } });
+      await prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { status: newStatus },
+      });
 
       const eventType =
-        newStatus === "PAID" ? EventTypes.INVOICE_PAID : EventTypes.INVOICE_PARTIALLY_PAID;
+        newStatus === "PAID"
+          ? EventTypes.INVOICE_PAID
+          : EventTypes.INVOICE_PARTIALLY_PAID;
       await eventBus.emit(
         eventType,
         organizationId,
-        { entityType: "Invoice", entityId: invoiceId, totalPaid: totalPaid.toString() },
-        actorId
+        {
+          entityType: "Invoice",
+          entityId: invoiceId,
+          totalPaid: totalPaid.toString(),
+        },
+        actorId,
       );
     }
   }
 
-  async toJsonExport(organizationId: string, invoiceId: string): Promise<Record<string, unknown>> {
+  async toJsonExport(
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<Record<string, unknown>> {
     const dto = await this.getById(organizationId, invoiceId);
     return {
       invoiceNumber: dto.invoiceNumber,
@@ -472,9 +586,7 @@ class InvoiceService {
     } as const;
   }
 
-  private computeIsIntraState(invoice: {
-    cgst: Decimal | string;
-  }): boolean {
+  private computeIsIntraState(invoice: { cgst: Decimal | string }): boolean {
     return new Decimal(invoice.cgst.toString()).greaterThan(0);
   }
 
@@ -512,13 +624,15 @@ class InvoiceService {
       grandTotal: invoice.grandTotal.toString(),
       isIntraState,
       pdfUrl: invoice.pdfUrl,
-      lineItems: invoice.lineItems.map((li): LineItemDTO => ({
-        id: li.id,
-        description: li.description,
-        quantity: li.quantity.toString(),
-        unitPrice: li.unitPrice.toString(),
-        lineTotal: li.lineTotal.toString(),
-      })),
+      lineItems: invoice.lineItems.map(
+        (li): LineItemDTO => ({
+          id: li.id,
+          description: li.description,
+          quantity: li.quantity.toString(),
+          unitPrice: li.unitPrice.toString(),
+          lineTotal: li.lineTotal.toString(),
+        }),
+      ),
       createdAt: invoice.createdAt,
       updatedAt: invoice.updatedAt,
     };
